@@ -1,0 +1,119 @@
+// Scalar Console (Scalarcon) - monitor/monitor.c
+
+#include "monitor.h"
+#include "display_core.h"
+#include "../log.h"
+
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
+
+SDL_Window *window = NULL;
+SDL_Renderer *renderer = NULL;
+// SDL_Rect display_bounds;
+SDL_Event sdl_event;
+SDL_DisplayMode *display_mode = NULL;
+TTF_Font *default_font = NULL;
+
+bool monitor_on = true;
+
+int monitor_init(void)
+{
+	if (!SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "SDL_RENDER_DRIVER", "software", true))
+	{
+		Log(ERROR, "Failed to set SDL environment variable: %s", SDL_GetError());
+		return -1;
+	}
+
+	uint8_t drivers_num = SDL_GetNumVideoDrivers();
+	Log(INFO, "Detected video driver number : %u", drivers_num);
+	for (uint8_t index = 0; index < drivers_num; index++)	Log(INFO, "Video Driver %d: %s", index, SDL_GetVideoDriver(index));
+
+	if (!SDL_Init(SDL_INIT_VIDEO) || !TTF_Init())
+	{
+		Log(ERROR, "Failed to initialize SDL3 core: %s", SDL_GetError());
+		return -1;
+	}
+
+	if(!(default_font = TTF_OpenFont("lib/SourceHanMono-Regular.otf", 18.0f)))	// previous: DejaVuSansMono.ttf
+	{
+		Log(ERROR, "Failed to load default True-type font: DejaVu Sans Mono: %s", SDL_GetError());	// TTF_GetError();
+		TTF_Quit();
+		SDL_Quit();
+		return -1;
+	}
+
+	Log(INFO, "Current Video Driver: %s.", SDL_GetCurrentVideoDriver());
+
+	int count = 0;
+	if ((display_mode = (SDL_DisplayMode *)SDL_GetCurrentDisplayMode(SDL_GetDisplays(&count)[0])) == NULL)	// '=', not "==".
+	{
+		Log(ERROR, "Failed to get display mode: %s", SDL_GetError());
+		TTF_Quit();
+		SDL_Quit();
+	}
+
+	Log(INFO, "Current display mode: %dx%d @ %.2lfHz.", display_mode->w, display_mode->h, display_mode->refresh_rate);
+	if (!(window = SDL_CreateWindow("Scalarcon", display_mode->w, display_mode->h, SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_ALWAYS_ON_TOP)))
+	{
+		Log(ERROR, "Failed to create window: %s", SDL_GetError());
+		TTF_Quit();
+		SDL_Quit();
+		return -1;
+	}
+
+	SDL_SetWindowPosition(window, 0, 0);
+	if (!SDL_SetWindowSurfaceVSync(window, SDL_WINDOW_SURFACE_VSYNC_ADAPTIVE))	Log(WARN, "Failed to enable VSync: %s", SDL_GetError());
+
+	SDL_PropertiesID props = SDL_CreateProperties();
+	SDL_SetPointerProperty(props, SDL_PROP_RENDERER_CREATE_WINDOW_POINTER, window);
+	SDL_SetNumberProperty(props, SDL_PROP_RENDERER_CREATE_PRESENT_VSYNC_NUMBER, 1);
+	if (!(renderer = SDL_CreateRendererWithProperties(props)))
+	{
+		Log(ERROR, "Failed to create renderer: %s", SDL_GetError());
+		SDL_DestroyProperties(props);
+		SDL_DestroyWindow(window);
+		TTF_Quit();
+		SDL_Quit();
+	}
+	SDL_DestroyProperties(props);
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+
+	SDL_HideCursor();
+
+	SDL_Rect viewport;
+	if (!strcmp(SDL_GetCurrentVideoDriver(), "kmsdrm"))
+	{
+		viewport = (SDL_Rect){0.0, 0.0, (float)display_mode->w, (float)display_mode->h};
+		SDL_SetRenderViewport(renderer, &viewport);
+	}
+
+	return 0;
+}
+
+void *monitor_thread(void *)
+{
+	while (monitor_on)
+	{
+		while (SDL_PollEvent(&sdl_event))
+		{
+			switch (sdl_event.type)
+			{
+				case SDL_EVENT_QUIT:	monitor_on = false; break;
+				case SDL_EVENT_KEY_DOWN:
+					if (sdl_event.key.scancode == SDL_SCANCODE_ESCAPE)	monitor_on = false;
+					break;
+			}
+		}
+	}
+
+	return NULL;
+}
+
+void monitor_destroy(void)
+{
+	TTF_CloseFont(default_font);
+	SDL_DestroyRenderer(renderer);
+	SDL_DestroyWindow(window);
+	TTF_Quit();
+	SDL_Quit();
+}
